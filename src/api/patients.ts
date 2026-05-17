@@ -1,11 +1,15 @@
 import { apiClient } from './client'
-import type { PageResponse, Patient, PatientRisk } from '../types'
+import type { PageResponse, Patient, PatientRisk, PatientGender } from '../types'
 
 export interface PatientPayload {
   name: string
-  age: number
-  bed: string
+  cpf?: string
+  rg?: string
+  birthDate: string        // "yyyy-MM-dd"
+  gender?: PatientGender
+  phone?: string
   risk: PatientRisk
+  observations?: string
 }
 
 export interface ListPatientsParams {

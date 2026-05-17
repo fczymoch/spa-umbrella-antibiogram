@@ -32,6 +32,7 @@ apiClient.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('biolab:token')
+      localStorage.removeItem('biolab:refresh')
       localStorage.removeItem('biolab:user')
       // Redireciona para o login sem depender do React Router
       if (window.location.pathname !== '/login') {

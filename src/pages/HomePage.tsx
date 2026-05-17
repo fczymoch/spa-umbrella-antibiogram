@@ -1,8 +1,9 @@
 import { useMemo } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Doughnut } from 'react-chartjs-2'
 import { Chart as ChartJS, ArcElement, Legend, Tooltip } from 'chart.js'
-import { getDashboard } from '../api/dashboard.ts'
+import { getDashboardStats, getDashboardRecent } from '../api/dashboard.ts'
 import { listExams } from '../api/exams.ts'
 import { useAuth } from '../hooks/useAuth.ts'
 import { Spinner } from '../components/Spinner.tsx'
@@ -118,26 +119,39 @@ const STATUS_LEGEND = [
 export function HomePage() {
   const { user } = useAuth()
 
-  // Endpoint agregado do backend: GET /v1/dashboard
-  const dashboardQuery = useQuery({
-    queryKey: ['dashboard'],
-    queryFn: getDashboard,
+  // GET /v1/dashboard/stats — totais e contagem por status (gráfico)
+  const statsQuery = useQuery({
+    queryKey: ['dashboard', 'stats'],
+    queryFn: getDashboardStats,
   })
 
-  // Lista curta dos exames mais recentes para os cards "Antibiogramas recentes"
-  // e "Em análise" da home (o /dashboard só traz Finalizados).
+  // GET /v1/dashboard/recent — últimos exames finalizados (tabela)
+  const recentQuery = useQuery({
+    queryKey: ['dashboard', 'recent'],
+    queryFn: getDashboardRecent,
+  })
+
+  // GET /v1/exams — últimos exames de todos os status para o card "Antibiogramas recentes"
   const recentExamsQuery = useQuery({
-    queryKey: ['exams', { page: 1, limit: 8 }],
-    queryFn: () => listExams({ page: 1, limit: 8 }),
+    queryKey: ['exams', 'home-recent'],
+    queryFn: () => listExams({ page: 1, limit: 4 }),
   })
 
-  const dashboard      = dashboardQuery.data
-  const recentExams    = recentExamsQuery.data?.data ?? []
-  const statusSummary  = dashboard?.exams.byStatus ?? {}
-  const totalExams     = dashboard?.exams.total ?? 0
-  const totalAttach    = dashboard?.attachments.total ?? 0
-  const recentAttach   = dashboard?.attachments.recent ?? []
-  const recentDone     = dashboard?.exams.recentFinalized ?? []
+  // GET /v1/exams — apenas "Em análise" para o card dedicado
+  const inAnalysisQuery = useQuery({
+    queryKey: ['exams', 'home-in-analysis'],
+    queryFn: () => listExams({ page: 1, limit: 8, status: ['Em análise'] }),
+  })
+
+  const stats         = statsQuery.data
+  const recentExams   = recentExamsQuery.data?.data ?? []
+  const inAnalysis    = inAnalysisQuery.data?.data ?? []
+  const recentDone    = recentQuery.data ?? []
+  const totalAttach   = 0      // attachments não fazem parte do split — virá na Fase 5
+  const recentAttach: Array<{ id: string; fileName: string; uploadedAt: string }> = []
+
+  const statusSummary = useMemo(() => stats?.byStatus ?? {}, [stats])
+  const totalExams    = stats?.total ?? 0
 
   const chartData = useMemo(() => {
     const labels = STATUS_LEGEND.map((s) => s.key)
@@ -159,7 +173,7 @@ export function HomePage() {
     cutout: '68%',
   }), [])
 
-  if (dashboardQuery.isLoading) {
+  if (statsQuery.isLoading || recentQuery.isLoading) {
     return (
       <div className="page" style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-8)' }}>
         <Spinner size="lg" />
@@ -167,7 +181,7 @@ export function HomePage() {
     )
   }
 
-  if (dashboardQuery.isError) {
+  if (statsQuery.isError) {
     return (
       <div className="page">
         <div className="page-header">
@@ -178,9 +192,9 @@ export function HomePage() {
         </div>
         <section className="card">
           <p className="muted">
-            Não foi possível carregar o dashboard. {extractErrorMessage(dashboardQuery.error)}
+            Não foi possível carregar o dashboard. {extractErrorMessage(statsQuery.error)}
           </p>
-          <button className="btn btn--primary" onClick={() => dashboardQuery.refetch()} style={{ marginTop: 'var(--space-3)' }}>
+          <button className="btn btn--primary" onClick={() => { void statsQuery.refetch(); void recentQuery.refetch() }} style={{ marginTop: 'var(--space-3)' }}>
             Tentar novamente
           </button>
         </section>
@@ -239,6 +253,46 @@ export function HomePage() {
           </div>
         </div>
       </div>
+
+      {/* ── Dashboard — gráfico ────────────────────────── */}
+      <section className="card">
+        <div className="card-header">
+          <h3>Dashboard</h3>
+          <span className="pill subtle">Distribuição de status</span>
+        </div>
+        <div className="home-chart-wrap">
+          <div className="home-chart-donut">
+            <Doughnut data={chartData} options={chartOptions} />
+          </div>
+          <ul className="home-chart-legend">
+            {STATUS_LEGEND.map((s) => {
+              const count = statusSummary[s.key] || 0
+              const pct = totalExams > 0 ? Math.round((count / totalExams) * 100) : 0
+              return (
+                <li key={s.key} className="home-chart-legend__item">
+                  <div className="home-chart-legend__row">
+                    <span className="home-chart-legend__dot" style={{ background: s.color }} />
+                    <span className="home-chart-legend__label">{s.label}</span>
+                    <span className="home-chart-legend__count">{count}</span>
+                  </div>
+                  <div className="home-chart-legend__bar-track">
+                    <div
+                      className="home-chart-legend__bar-fill"
+                      style={{ width: `${pct}%`, background: s.color }}
+                    />
+                  </div>
+                </li>
+              )
+            })}
+            <li style={{ paddingTop: 'var(--space-2)', borderTop: '1px solid var(--color-border)' }}>
+              <p className="muted small">Total de exames monitorados</p>
+              <p style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-bold)', margin: '2px 0 0', color: 'var(--color-text)' }}>
+                {totalExams}
+              </p>
+            </li>
+          </ul>
+        </div>
+      </section>
 
       {/* ── Sobre a aplicação ──────────────────────────── */}
       <div className="home-main-grid">
@@ -308,7 +362,7 @@ export function HomePage() {
                 <li key={exam.id} className="list-row">
                   <div className="list-row__icon"><IconFlask /></div>
                   <div style={{ flex: 1 }}>
-                    <p className="list-title">{exam.patientName}</p>
+                    <Link className="list-title" to={`/app/exams/${exam.id}`}>{exam.patientName}</Link>
                     <p className="muted small">{exam.organism}</p>
                   </div>
                   <div className="list-meta">
@@ -320,46 +374,6 @@ export function HomePage() {
           )}
         </section>
       </div>
-
-      {/* ── Dashboard — row própria ─────────────────────── */}
-      <section className="card">
-        <div className="card-header">
-          <h3>Dashboard</h3>
-          <span className="pill subtle">Distribuição de status</span>
-        </div>
-        <div className="home-chart-wrap">
-          <div className="home-chart-donut">
-            <Doughnut data={chartData} options={chartOptions} />
-          </div>
-          <ul className="home-chart-legend">
-            {STATUS_LEGEND.map((s) => {
-              const count = statusSummary[s.key] || 0
-              const pct = totalExams > 0 ? Math.round((count / totalExams) * 100) : 0
-              return (
-                <li key={s.key} className="home-chart-legend__item">
-                  <div className="home-chart-legend__row">
-                    <span className="home-chart-legend__dot" style={{ background: s.color }} />
-                    <span className="home-chart-legend__label">{s.label}</span>
-                    <span className="home-chart-legend__count">{count}</span>
-                  </div>
-                  <div className="home-chart-legend__bar-track">
-                    <div
-                      className="home-chart-legend__bar-fill"
-                      style={{ width: `${pct}%`, background: s.color }}
-                    />
-                  </div>
-                </li>
-              )
-            })}
-            <li style={{ paddingTop: 'var(--space-2)', borderTop: '1px solid var(--color-border)' }}>
-              <p className="muted small">Total de exames monitorados</p>
-              <p style={{ fontSize: 'var(--font-size-2xl)', fontWeight: 'var(--font-weight-bold)', margin: '2px 0 0', color: 'var(--color-text)' }}>
-                {totalExams}
-              </p>
-            </li>
-          </ul>
-        </div>
-      </section>
 
       {/* ── Second grid ────────────────────────────────── */}
       <div className="grid">
@@ -374,19 +388,19 @@ export function HomePage() {
           ) : (
             <ul className="list">
               {recentExams.slice(0, 4).map((exam) => (
-                <li key={exam.id} className="list-row">
+                <li key={exam.id} className="list-row list-row--stacked">
                   <div className="list-row__icon"><IconFlask /></div>
-                  <div style={{ flex: 1 }}>
-                    <p className="list-title">{exam.patientName ?? '—'}</p>
+                  <div className="list-row__body">
+                    <Link className="list-title" to={`/app/exams/${exam.id}`}>{exam.patientName ?? '—'}</Link>
                     <p className="muted small">{exam.organism} · {exam.specimen}</p>
-                    {(exam.status === 'Em análise' || exam.status === 'Pendente') && (
-                      <p className="muted small" style={{ marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <IconClock /> {elapsedLabel(exam.collectedAt)}
-                      </p>
-                    )}
-                  </div>
-                  <div className="list-meta">
-                    <span className={`pill status ${statusClass(exam.status)}`}>{exam.status}</span>
+                    <div className="list-row__footer">
+                      <span className={`pill status ${statusClass(exam.status)}`}>{exam.status}</span>
+                      {(exam.status === 'Em análise' || exam.status === 'Pendente') && (
+                        <span className="muted small list-row__elapsed">
+                          <IconClock /> {elapsedLabel(exam.collectedAt)}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </li>
               ))}
@@ -401,20 +415,20 @@ export function HomePage() {
             <span className="pill subtle">Em processamento</span>
           </div>
           <ul className="list">
-            {recentExams.filter((e) => e.status === 'Em análise').length === 0 ? (
+            {inAnalysis.length === 0 ? (
               <li className="list-row"><p className="muted small">Nenhum exame em análise no momento.</p></li>
-            ) : recentExams.filter((e) => e.status === 'Em análise').map((exam) => (
-              <li key={exam.id} className="list-row">
+            ) : inAnalysis.map((exam) => (
+              <li key={exam.id} className="list-row list-row--stacked">
                 <div className="list-row__icon"><IconFlask /></div>
-                <div style={{ flex: 1 }}>
-                  <p className="list-title">{exam.patientName ?? '—'}</p>
+                <div className="list-row__body">
+                  <Link className="list-title" to={`/app/exams/${exam.id}`}>{exam.patientName ?? '—'}</Link>
                   <p className="muted small">{exam.organism} · {exam.specimen}</p>
-                </div>
-                <div className="list-meta">
-                  <span className="muted" style={{ display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
-                    <IconClock /> {elapsedLabel(exam.collectedAt)}
-                  </span>
-                  <span className="pill status warn">Em análise</span>
+                  <div className="list-row__footer">
+                    <span className="pill status warn">Em análise</span>
+                    <span className="muted small list-row__elapsed">
+                      <IconClock /> {elapsedLabel(exam.collectedAt)}
+                    </span>
+                  </div>
                 </div>
               </li>
             ))}

@@ -12,7 +12,7 @@ export interface LoginResponse {
   token: string
   refreshToken?: string
   expiresIn: number
-  user: User
+  user: Required<Pick<User, 'id' | 'status'>> & User
 }
 
 export interface RefreshResponse {

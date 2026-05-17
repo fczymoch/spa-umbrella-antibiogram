@@ -12,6 +12,8 @@ const KNOWN_STATUSES = ['Pendente', 'Em análise', 'Pendente de avaliação', 'F
 export function ExamsPage() {
   const [searchParams] = useSearchParams()
   const viewParam = searchParams.get('view') === 'mine' ? 'mine' : 'all'
+
+  // ── Estado dos inputs (não dispara query diretamente) ─────────────────────
   const [patientSearch, setPatientSearch] = useState('')
   const [doctorSearch, setDoctorSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string[]>([])
@@ -19,17 +21,41 @@ export function ExamsPage() {
   const [dateTo, setDateTo] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
 
-  // Monta os params de forma estável para a queryKey
+  // ── Estado "aplicado" — só muda ao clicar em Pesquisar ───────────────────
+  const [appliedPatient, setAppliedPatient] = useState('')
+  const [appliedDoctor, setAppliedDoctor] = useState('')
+  const [appliedStatus, setAppliedStatus] = useState<string[]>([])
+  const [appliedDateFrom, setAppliedDateFrom] = useState('')
+  const [appliedDateTo, setAppliedDateTo] = useState('')
+
+  const applyFilters = () => {
+    setAppliedPatient(patientSearch.trim())
+    setAppliedDoctor(doctorSearch.trim())
+    setAppliedStatus(statusFilter)
+    setAppliedDateFrom(dateFrom)
+    setAppliedDateTo(dateTo)
+    setCurrentPage(1)
+  }
+
+  const clearFilters = () => {
+    setPatientSearch(''); setDoctorSearch('')
+    setStatusFilter([]); setDateFrom(''); setDateTo('')
+    setAppliedPatient(''); setAppliedDoctor('')
+    setAppliedStatus([]); setAppliedDateFrom(''); setAppliedDateTo('')
+    setCurrentPage(1)
+  }
+
+  // ── Query usa apenas os valores aplicados ─────────────────────────────────
   const params = useMemo<ListExamsParams>(() => ({
     view: viewParam,
-    patientName: patientSearch.trim() || undefined,
-    doctorName: doctorSearch.trim() || undefined,
-    status: statusFilter.length > 0 ? statusFilter : undefined,
-    dateFrom: dateFrom || undefined,
-    dateTo: dateTo || undefined,
+    patientName: appliedPatient || undefined,
+    doctorName: appliedDoctor || undefined,
+    status: appliedStatus.length > 0 ? appliedStatus : undefined,
+    dateFrom: appliedDateFrom || undefined,
+    dateTo: appliedDateTo || undefined,
     page: currentPage,
     limit: ITEMS_PER_PAGE,
-  }), [viewParam, patientSearch, doctorSearch, statusFilter, dateFrom, dateTo, currentPage])
+  }), [viewParam, appliedPatient, appliedDoctor, appliedStatus, appliedDateFrom, appliedDateTo, currentPage])
 
   const examsQuery = useQuery({
     queryKey: ['exams', params],
@@ -68,8 +94,7 @@ export function ExamsPage() {
     return date.toLocaleDateString('pt-BR')
   }, [])
 
-  const resetPage = () => setCurrentPage(1)
-  const hasActiveFilters = statusFilter.length > 0 || dateFrom || dateTo || patientSearch || doctorSearch
+  const hasActiveFilters = appliedStatus.length > 0 || appliedDateFrom || appliedDateTo || appliedPatient || appliedDoctor
 
   return (
     <div className="page">
@@ -99,12 +124,11 @@ export function ExamsPage() {
                 type="button"
                 className={`filter-status-btn${statusFilter.includes(status) ? ' active' : ''}`}
                 aria-pressed={statusFilter.includes(status)}
-                onClick={() => {
+                onClick={() =>
                   setStatusFilter((prev) =>
                     prev.includes(status) ? prev.filter((s) => s !== status) : [...prev, status],
                   )
-                  resetPage()
-                }}
+                }
               >
                 {status}
               </button>
@@ -120,11 +144,12 @@ export function ExamsPage() {
               type="date"
               className="filter-date-input"
               inputMode="none"
+              lang="pt-BR"
+              placeholder="dd/mm/aaaa"
               onKeyDown={(e) => e.preventDefault()}
               onClick={(e) => e.currentTarget.showPicker?.()}
-              lang="pt-BR"
               value={dateFrom}
-              onChange={(e) => { setDateFrom(e.target.value); resetPage() }}
+              onChange={(e) => setDateFrom(e.target.value)}
             />
           </div>
           <div>
@@ -134,11 +159,12 @@ export function ExamsPage() {
               type="date"
               className="filter-date-input"
               inputMode="none"
+              lang="pt-BR"
+              placeholder="dd/mm/aaaa"
               onKeyDown={(e) => e.preventDefault()}
               onClick={(e) => e.currentTarget.showPicker?.()}
-              lang="pt-BR"
               value={dateTo}
-              onChange={(e) => { setDateTo(e.target.value); resetPage() }}
+              onChange={(e) => setDateTo(e.target.value)}
             />
           </div>
         </div>
@@ -152,7 +178,8 @@ export function ExamsPage() {
               className="filter-search-input"
               placeholder="Digite o nome do paciente"
               value={patientSearch}
-              onChange={(e) => { setPatientSearch(e.target.value); resetPage() }}
+              onChange={(e) => setPatientSearch(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
             />
           </div>
           <div>
@@ -163,36 +190,38 @@ export function ExamsPage() {
               className="filter-search-input"
               placeholder="Digite o nome do médico"
               value={doctorSearch}
-              onChange={(e) => { setDoctorSearch(e.target.value); resetPage() }}
+              onChange={(e) => setDoctorSearch(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && applyFilters()}
             />
           </div>
+        </div>
+
+        <div className="filter-actions">
+          <span className="filter-actions__spacer" />
+          {hasActiveFilters && (
+            <button className="btn btn--ghost" type="button" onClick={clearFilters}>
+              Limpar filtros
+            </button>
+          )}
+          <button className="btn btn--primary" type="button" onClick={applyFilters}>
+            <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+            </svg>
+            Pesquisar
+          </button>
         </div>
 
         {hasActiveFilters && (
           <div className="active-filters-bar">
             <span className="active-filters-label">Filtros ativos:</span>
-            {statusFilter.map((status) => (
+            {appliedStatus.map((status) => (
               <span key={status} className="pill subtle">Status: {status}</span>
             ))}
-            {dateFrom && <span className="pill subtle">De: {formatDateOnly(dateFrom)}</span>}
-            {dateTo && <span className="pill subtle">Até: {formatDateOnly(dateTo)}</span>}
-            {patientSearch && <span className="pill subtle">Paciente: {patientSearch}</span>}
-            {doctorSearch && <span className="pill subtle">Médico: {doctorSearch}</span>}
-            <button
-              className="ghost"
-              type="button"
-              style={{ marginLeft: 'auto' }}
-              onClick={() => {
-                setStatusFilter([])
-                setDateFrom('')
-                setDateTo('')
-                setPatientSearch('')
-                setDoctorSearch('')
-                resetPage()
-              }}
-            >
-              Limpar filtros
-            </button>
+            {appliedDateFrom && <span className="pill subtle">De: {formatDateOnly(appliedDateFrom)}</span>}
+            {appliedDateTo && <span className="pill subtle">Até: {formatDateOnly(appliedDateTo)}</span>}
+            {appliedPatient && <span className="pill subtle">Paciente: {appliedPatient}</span>}
+            {appliedDoctor && <span className="pill subtle">Médico: {appliedDoctor}</span>}
           </div>
         )}
       </div>
@@ -226,18 +255,17 @@ export function ExamsPage() {
         ) : (
           <ul className="list">
             {exams.map((exam) => (
-              <li key={exam.id} className="list-row">
-                <div>
-                  <p className="list-title">{exam.organism}</p>
+              <li key={exam.id} className="list-row list-row--stacked">
+                <div className="list-row__body">
+                  <Link className="list-title" to={`/app/exams/${exam.id}`}>{exam.organism}</Link>
                   <p className="muted small">{exam.specimen} • {exam.site}</p>
                   <p className="muted small">
                     Paciente: {exam.patientName ?? 'Paciente'} • Médico: {exam.doctorName ?? 'Médico'}
                   </p>
-                </div>
-                <div className="list-meta">
-                  <span className={`pill status ${statusClass(exam.status)}`}>{exam.status}</span>
-                  <span className="muted small">{formatDateTime(exam.collectedAt)}</span>
-                  <Link className="pill subtle" to={`/app/exams/${exam.id}`}>Ver detalhe →</Link>
+                  <div className="list-row__footer">
+                    <span className={`pill status ${statusClass(exam.status)}`}>{exam.status}</span>
+                    <span className="list-row__elapsed">{formatDateTime(exam.collectedAt)}</span>
+                  </div>
                 </div>
               </li>
             ))}

@@ -73,7 +73,7 @@ export function generateAntibiogramPDF(
   y += 5
   text(patient?.name ?? '—', MARGIN, y, { size: 11, bold: true })
   y += 6
-  text(`Idade: ${patient?.age ?? '—'} anos   |   Leito: ${patient?.bed ?? '—'}   |   Risco: ${patient?.risk ?? '—'}`, MARGIN, y, { size: 9, color: MUTED })
+  text(`Idade: ${patient?.age ?? '—'} anos   |   Risco: ${patient?.risk ?? '—'}${patient?.cpf ? `   |   CPF: ${patient.cpf}` : ''}`, MARGIN, y, { size: 9, color: MUTED })
   y += 5
   hLine(y, PRIMARY)
   y += 6
@@ -237,7 +237,7 @@ export function buildAntibiogramPDFBlob(
   y += 5
   text(patient?.name ?? '—', MARGIN, y, { size: 11, bold: true })
   y += 6
-  text(`Idade: ${patient?.age ?? '—'} anos   |   Leito: ${patient?.bed ?? '—'}   |   Risco: ${patient?.risk ?? '—'}`, MARGIN, y, { size: 9, color: MUTED })
+  text(`Idade: ${patient?.age ?? '—'} anos   |   Risco: ${patient?.risk ?? '—'}${patient?.cpf ? `   |   CPF: ${patient.cpf}` : ''}`, MARGIN, y, { size: 9, color: MUTED })
   y += 5
   hLine(y, PRIMARY)
   y += 6

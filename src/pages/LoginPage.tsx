@@ -82,7 +82,9 @@ export function LoginPage() {
         (location.state as { from?: Location } | undefined)?.from?.pathname || '/app'
       navigate(redirectTo, { replace: true })
     } catch (error) {
-      setServerError(extractErrorMessage(error, 'Não foi possível autenticar. Verifique e tente novamente.'))
+      // O backend retorna mensagens amigáveis no body para todos os 401.
+      // extractErrorMessage lê data.error || data.message automaticamente.
+      setServerError(extractErrorMessage(error, 'Não foi possível autenticar. Verifique suas credenciais.'))
     } finally {
       setLoading(false)
     }

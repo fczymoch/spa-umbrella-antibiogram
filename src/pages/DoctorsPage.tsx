@@ -92,24 +92,21 @@ export function DoctorsPage() {
         ) : (
           <ul className="list">
             {doctors.map((doctor) => (
-              <li key={doctor.id} className="list-row">
-                <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
+              <li key={doctor.id} className="list-row list-row--stacked">
+                <div className="list-row__body" style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: 'var(--space-3)' }}>
                   <div className="topbar-avatar" style={{ width: '40px', height: '40px', fontSize: 'var(--font-size-base)', flexShrink: 0 }}>
                     {doctor.name.replace('Dr. ', '').replace('Dra. ', '').charAt(0)}
                   </div>
-                  <div>
-                    <p className="list-title">{doctor.name}</p>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <Link className="list-title" to={`/app/doctors/${doctor.id}`}>{doctor.name}</Link>
                     <p className="muted small">{doctor.specialty}</p>
+                    <div className="list-row__footer">
+                      <span className="pill subtle">{doctor.shift}</span>
+                      <span className="list-row__elapsed">
+                        {examsByDoctor[doctor.id] ?? 0} antibiograma{(examsByDoctor[doctor.id] ?? 0) !== 1 ? 's' : ''}
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div className="list-meta">
-                  <span className="pill subtle">{doctor.shift}</span>
-                  <span className="muted small">
-                    {examsByDoctor[doctor.id] ?? 0} antibiograma{(examsByDoctor[doctor.id] ?? 0) !== 1 ? 's' : ''}
-                  </span>
-                  <Link className="pill subtle" to={`/app/doctors/${doctor.id}`}>
-                    Ver perfil →
-                  </Link>
                 </div>
               </li>
             ))}

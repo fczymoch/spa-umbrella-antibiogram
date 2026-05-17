@@ -74,13 +74,19 @@ export type Exam = {
 }
 
 export type PatientRisk = 'Verde' | 'Amarelo' | 'Vermelho'
+export type PatientGender = 'Masculino' | 'Feminino' | 'Outro'
 
 export type Patient = {
   id: string
   name: string
-  age: number
-  bed: string
+  cpf?: string
+  rg?: string
+  birthDate: string
+  age: number           // calculado pelo backend — somente leitura
+  gender?: PatientGender
+  phone?: string
   risk: PatientRisk
+  observations?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -118,19 +124,23 @@ export type Report = {
 
 // ── Dashboard ───────────────────────────────────────────────────────────────
 
+export type DashboardRecentExam = {
+  id: string
+  patientName: string
+  organism: string
+  collectedAt: string
+  status: string
+  previewUrl: string
+}
+
+export type DashboardExamStats = {
+  total: number
+  byStatus: Record<string, number>
+  recentFinalized: DashboardRecentExam[]
+}
+
 export type DashboardResponse = {
-  exams: {
-    total: number
-    byStatus: Record<string, number>
-    recentFinalized: Array<{
-      id: string
-      patientName: string
-      organism: string
-      collectedAt: string
-      status: string
-      previewUrl: string
-    }>
-  }
+  exams: DashboardExamStats
   attachments: {
     total: number
     recent: Array<{

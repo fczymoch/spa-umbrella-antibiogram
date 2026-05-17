@@ -125,7 +125,7 @@ export function DoctorDetailPage() {
             {doctorExams.map((exam) => (
               <li key={exam.id} className="list-row">
                 <div>
-                  <p className="list-title">{exam.organism}</p>
+                  <Link className="list-title" to={`/app/exams/${exam.id}`}>{exam.organism}</Link>
                   <p className="muted small">
                     {exam.patientName ?? 'Paciente'} · {exam.specimen} · {exam.site}
                   </p>
@@ -134,9 +134,6 @@ export function DoctorDetailPage() {
                 <div className="list-meta">
                   <span className={`pill status ${statusClass(exam.status)}`}>{exam.status}</span>
                   <span className="pill subtle">{exam.source}</span>
-                  <Link className="pill subtle" to={`/app/exams/${exam.id}`}>
-                    Ver antibiograma →
-                  </Link>
                 </div>
               </li>
             ))}

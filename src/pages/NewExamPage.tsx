@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { listPatients } from '../api/patients.ts'
+import { listPatients, createPatient } from '../api/patients.ts'
 import { Spinner } from '../components/Spinner.tsx'
 import { extractErrorMessage } from '../api/client.ts'
 import { useToast } from '../contexts/useToast.ts'
-import type { Patient } from '../types.ts'
+import { validatePatientForm, hasFormErrors, maskCpf, maskPhone, maskRg, type PatientFormErrors } from '../utils/patientValidation.ts'
+import { createExam } from '../api/exams.ts'
+import { useQueryClient } from '@tanstack/react-query'
+import type { Patient, PatientRisk, PatientGender } from '../types.ts'
 
-type Step = 'select' | 'running' | 'done'
+type Step = 'select' | 'confirm' | 'running' | 'done'
 interface TerminalLine { text: string; type: string }
 interface ImageItem    { label: string; url: string }
 interface ImageGroup   { name: string; images: ImageItem[] }
@@ -41,57 +44,168 @@ export function NewExamPage() {
   const [logOpen, setLogOpen]   = useState(false)
   const [lightbox, setLightbox] = useState<string | null>(null)
   const terminalRef             = useRef<HTMLDivElement>(null)
-  const esRef                   = useRef<EventSource | null>(null)
 
-  // Limpa o EventSource ao desmontar
-  useEffect(() => () => esRef.current?.close(), [])
+  // Modal de criação de paciente
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [creating, setCreating]               = useState(false)
+  const [createName, setCreateName]           = useState('')
+  const [createBirthDate, setCreateBirthDate] = useState('')
+  const [createGender, setCreateGender]       = useState<PatientGender | ''>('')
+  const [createCpf, setCreateCpf]             = useState('')
+  const [createRg, setCreateRg]               = useState('')
+  const [createPhone, setCreatePhone]         = useState('')
+  const [createRisk, setCreateRisk]           = useState<PatientRisk>('Verde')
+  const [createObs, setCreateObs]             = useState('')
+  const [fieldErrors, setFieldErrors]         = useState<PatientFormErrors>({ name: '', birthDate: '', cpf: '', rg: '', phone: '' })
+  const [submitError, setSubmitError]         = useState('')
+
+  const openCreateModal = () => {
+    setCreateName(''); setCreateBirthDate(''); setCreateGender('')
+    setCreateCpf(''); setCreateRg(''); setCreatePhone('')
+    setCreateRisk('Verde'); setCreateObs('')
+    setFieldErrors({ name: '', birthDate: '', cpf: '', rg: '', phone: '' })
+    setSubmitError('')
+    setShowCreateModal(true)
+  }
+
+  const submitCreatePatient = async () => {
+    const errors = validatePatientForm({
+      name: createName, birthDate: createBirthDate, gender: createGender,
+      cpf: createCpf, rg: createRg, phone: createPhone, observations: createObs,
+    })
+    setFieldErrors(errors)
+    if (hasFormErrors(errors)) return
+
+    setCreating(true)
+    setSubmitError('')
+    try {
+      const novo = await createPatient({
+        name: createName.trim(),
+        birthDate: createBirthDate,
+        gender: createGender || undefined,
+        cpf: createCpf.trim() || undefined,
+        rg: createRg.trim() || undefined,
+        phone: createPhone.trim() || undefined,
+        risk: createRisk,
+        observations: createObs.trim() || undefined,
+      })
+      setShowCreateModal(false)
+      setPatient(novo)
+      setStep('confirm')
+      toast(`Paciente ${novo.name} criado com sucesso.`, 'success')
+    } catch (err) {
+      setSubmitError(extractErrorMessage(err, 'Erro ao criar paciente.'))
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  // no-op cleanup (SSE removed from flow)
+  useEffect(() => () => {}, [])
 
   const filtered = patients.filter(p =>
     p.name.toLowerCase().includes(query.toLowerCase()) ||
-    p.bed.toLowerCase().includes(query.toLowerCase())
+    (p.cpf ?? '').toLowerCase().includes(query.toLowerCase())
   )
 
-  const pushLine = (line: TerminalLine) => {
-    setLines(prev => [...prev, line])
-    requestAnimationFrame(() => {
-      if (terminalRef.current)
-        terminalRef.current.scrollTop = terminalRef.current.scrollHeight
-    })
-  }
+  // pushLine/terminal removed from main flow but kept for potential logs
 
   const reset = () => {
-    esRef.current?.close()
     setStep('select'); setPatient(null); setQuery('')
     setLines([]); setImages(null); setLogOpen(false)
   }
 
-  const startExam = (p: Patient) => {
-    setPatient(p); setLines([]); setImages(null)
-    esRef.current?.close()
-    const es = new EventSource(`${SCRIPT_SERVER_URL}/api/run`)
-    esRef.current = es
-    setStep('running')
+  // Note: SSE/local execution removed from the creation flow. Exams are created
+  // on the main backend (POST /v1/exams). The external Unbrella service (5055)
+  // is used only for serving images; we don't call it to create exams.
 
-    es.onmessage = (e) => {
-      try {
-        const data = JSON.parse(e.data) as { type: string; text: string }
-        if (data.type === 'exit') {
-          es.close()
-          fetch(`${SCRIPT_SERVER_URL}/api/images`)
-            .then(r => r.json())
-            .then((res: ImagesResult) => { setImages(res); setStep('done') })
-            .catch(() => setStep('done'))
+  const queryClient = useQueryClient()
+
+  // Modal / state para criar o exame no backend
+  const [showExamCreateModal, setShowExamCreateModal] = useState(false)
+  const [examOrganism, setExamOrganism] = useState('')
+  const [examSpecimen, setExamSpecimen] = useState('Swab')
+  const [examCollectedAt, setExamCollectedAt] = useState(() => {
+    // default to today YYYY-MM-DD HH:mm
+    const d = new Date()
+    const pad = (n: number) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+  })
+  const [creatingExam, setCreatingExam] = useState(false)
+  const [createExamError, setCreateExamError] = useState('')
+  const [showCreationOverlay, setShowCreationOverlay] = useState(false)
+
+
+  const createViaBackend = async () => {
+    if (!patient) return
+    setCreateExamError('')
+    // open modal to collect missing fields
+    setShowExamCreateModal(true)
+  }
+
+  // Helper: tenta extrair response.data de um erro axios-like de forma segura
+  function extractResponseData(err: unknown): { code?: string; error?: string } | undefined {
+    if (typeof err !== 'object' || err === null) return undefined
+    const maybe = err as { response?: { data?: unknown } }
+    const data = maybe.response?.data
+    if (!data || typeof data !== 'object') return undefined
+    const d = data as Record<string, unknown>
+    return { code: typeof d.code === 'string' ? d.code : undefined, error: typeof d.error === 'string' ? d.error : undefined }
+  }
+
+  const submitCreateExam = async () => {
+    if (!patient) return
+    if (!examOrganism.trim() || !examSpecimen.trim()) {
+      setCreateExamError('Organismo e espécime são obrigatórios.')
+      return
+    }
+    setCreatingExam(true)
+    setCreateExamError('')
+    try {
+  // Use the DB doctor id provided (always)
+  const doctorId = 'caafb56a-48e4-4f0d-b10b-cc58ac374658'
+      if (!doctorId) {
+        setCreateExamError('Usuário logado não tem doctorId associado. Entre como médico para criar o exame.')
+        setCreatingExam(false)
+        return
+      }
+
+      const payload = {
+        patientId: patient.id,
+        doctorId,
+        organism: examOrganism.trim(),
+        specimen: examSpecimen.trim(),
+        collectedAt: examCollectedAt,
+      }
+      const created = await createExam(payload)
+      toast(`Exame criado: ${created.id}`, 'success')
+      // invalida lista de exames para puxar o novo
+      queryClient.invalidateQueries({ queryKey: ['exams'] })
+      setShowExamCreateModal(false)
+  // Após criar no backend, mostramos um overlay não bloqueante indicando
+  // que a criação/processing está em andamento. O usuário pode continuar
+  // navegando enquanto o processamento assíncrono ocorre no backend.
+  setShowCreationOverlay(true)
+    } catch (err) {
+      // Try to parse backend validation / not found errors
+      const parsed = extractResponseData(err)
+      if (parsed) {
+        const code = parsed.code
+        const serverError = parsed.error
+        if (code === 'NOT_FOUND' && serverError && serverError.includes('Doctor not found')) {
+          setCreateExamError(`Médico não encontrado (id informado). Mensagem do servidor: ${serverError}`)
+          setCreatingExam(false)
           return
         }
-        pushLine(data)
-      } catch {
-        pushLine({ type: 'stderr', text: e.data })
+        if (code === 'VALIDATION_ERROR') {
+          setCreateExamError(serverError || 'Dados inválidos')
+          setCreatingExam(false)
+          return
+        }
       }
-    }
-
-    es.onerror = () => {
-      pushLine({ type: 'error', text: '[ERRO] Não foi possível conectar ao servidor de scripts. Verifique se "npm run server" está rodando em ' + SCRIPT_SERVER_URL })
-      es.close(); setStep('done')
+      setCreateExamError((err as Error).message || 'Erro ao criar exame')
+    } finally {
+      setCreatingExam(false)
     }
   }
 
@@ -129,13 +243,18 @@ export function NewExamPage() {
           <span className="new-exam-step__label">Paciente</span>
         </div>
         <div className="new-exam-step__connector" />
-        <div className={`new-exam-step ${step === 'select' ? '' : step === 'running' ? 'active' : 'done'}`}>
+        <div className={`new-exam-step ${step === 'confirm' ? 'active' : ['running','done'].includes(step) ? 'done' : ''}`}>
           <span className="new-exam-step__num">2</span>
+          <span className="new-exam-step__label">Confirmar</span>
+        </div>
+        <div className="new-exam-step__connector" />
+        <div className={`new-exam-step ${step === 'running' ? 'active' : step === 'done' ? 'done' : ''}`}>
+          <span className="new-exam-step__num">3</span>
           <span className="new-exam-step__label">Executando</span>
         </div>
         <div className="new-exam-step__connector" />
         <div className={`new-exam-step ${step === 'done' ? 'done active' : ''}`}>
-          <span className="new-exam-step__num">3</span>
+          <span className="new-exam-step__num">4</span>
           <span className="new-exam-step__label">Resultados</span>
         </div>
       </div>
@@ -145,7 +264,12 @@ export function NewExamPage() {
         <section className="card">
           <div className="card-header">
             <h3>Buscar paciente</h3>
-            <span className="pill subtle">{patients.length} pacientes</span>
+            <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+              <span className="pill subtle">{patients.length} pacientes</span>
+              <button type="button" className="btn btn--primary btn--sm" onClick={openCreateModal}>
+                + Criar novo paciente
+              </button>
+            </div>
           </div>
 
           <div className="new-exam-search-wrap">
@@ -183,8 +307,8 @@ export function NewExamPage() {
                 {(query.trim() ? filtered : patients).map(p => (
                   <li key={p.id}>
                     <button type="button" className="new-exam-patient-btn" onClick={() => {
-                      startExam(p)
-                      toast(`Iniciando análise para ${p.name}…`, 'info')
+                      setPatient(p)
+                      setStep('confirm')
                     }}>
                       <span className="new-exam-patient-avatar">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
@@ -194,7 +318,7 @@ export function NewExamPage() {
                       </span>
                       <span className="new-exam-patient-info">
                         <span className="new-exam-patient-name">{p.name}</span>
-                        <span className="new-exam-patient-meta">Leito: {p.bed} · {p.age} anos</span>
+                        <span className="new-exam-patient-meta">{p.age} anos{p.gender ? ` • ${p.gender}` : ''}{p.cpf ? ` • CPF: ${p.cpf}` : ''}</span>
                       </span>
                       <span className={`pill status ${riskClass(p.risk)}`}>{p.risk}</span>
                       <span className="new-exam-patient-arrow">→</span>
@@ -207,7 +331,129 @@ export function NewExamPage() {
         </section>
       )}
 
-      {/* Steps 2 e 3 */}
+      {/* Step 2 — Confirmar paciente */}
+      {step === 'confirm' && patient && (
+        <section className="card new-exam-confirm-card">
+          <div className="card-header">
+            <h3>Confirmar paciente</h3>
+          </div>
+          <p className="muted" style={{ marginBottom: 'var(--space-4)' }}>
+            Verifique os dados do paciente antes de iniciar a análise.
+          </p>
+
+          <div className="new-exam-confirm-info">
+            <div className="new-exam-confirm-row">
+              <span className="new-exam-confirm-label">Nome</span>
+              <span className="new-exam-confirm-value">{patient.name}</span>
+            </div>
+            <div className="new-exam-confirm-row">
+              <span className="new-exam-confirm-label">Idade</span>
+              <span className="new-exam-confirm-value">{patient.age} anos</span>
+            </div>
+            {patient.birthDate && (
+              <div className="new-exam-confirm-row">
+                <span className="new-exam-confirm-label">Nascimento</span>
+                <span className="new-exam-confirm-value">
+                  {new Date(patient.birthDate + 'T00:00:00').toLocaleDateString('pt-BR')}
+                </span>
+              </div>
+            )}
+            {patient.gender && (
+              <div className="new-exam-confirm-row">
+                <span className="new-exam-confirm-label">Sexo</span>
+                <span className="new-exam-confirm-value">{patient.gender}</span>
+              </div>
+            )}
+            {patient.cpf && (
+              <div className="new-exam-confirm-row">
+                <span className="new-exam-confirm-label">CPF</span>
+                <span className="new-exam-confirm-value">{patient.cpf}</span>
+              </div>
+            )}
+            {patient.phone && (
+              <div className="new-exam-confirm-row">
+                <span className="new-exam-confirm-label">Telefone</span>
+                <span className="new-exam-confirm-value">{patient.phone}</span>
+              </div>
+            )}
+            <div className="new-exam-confirm-row">
+              <span className="new-exam-confirm-label">Risco</span>
+              <span className={`pill status ${riskClass(patient.risk)}`}>{patient.risk}</span>
+            </div>
+            {patient.observations && (
+              <div className="new-exam-confirm-row">
+                <span className="new-exam-confirm-label">Observações</span>
+                <span className="new-exam-confirm-value">{patient.observations}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="new-exam-confirm-actions">
+            <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+              <button type="button" className="btn btn--ghost" onClick={() => setStep('select')}>
+                ← Alterar paciente
+              </button>
+              <button type="button" className="btn btn--primary" onClick={createViaBackend}>
+                Confirmar e criar exame →
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* Modal para criar exame no backend (coleta fields mínimos) */}
+      {showExamCreateModal && (
+        <div className="exam-create-modal-overlay" onClick={() => setShowExamCreateModal(false)}>
+          <div className="exam-create-modal" onClick={e => e.stopPropagation()} role="dialog">
+            <div className="exam-create-modal__header">
+              <h3>Criar exame para {patient?.name}</h3>
+              <button type="button" className="exam-create-modal__close" onClick={() => setShowExamCreateModal(false)}>✕</button>
+            </div>
+            <div className="exam-create-form">
+              <label className="form-label">
+                Organismo *
+                <input className="input" value={examOrganism} onChange={e => setExamOrganism(e.target.value)} />
+              </label>
+              <label className="form-label">
+                Espécime *
+                <input className="input" value={examSpecimen} onChange={e => setExamSpecimen(e.target.value)} />
+              </label>
+              <label className="form-label">
+                Coletado em
+                <input className="input" value={examCollectedAt} onChange={e => setExamCollectedAt(e.target.value)} />
+              </label>
+              {createExamError && <p className="form-error">{createExamError}</p>}
+            </div>
+            <div className="exam-create-modal__footer">
+              <button type="button" className="btn btn--ghost" onClick={() => setShowExamCreateModal(false)} disabled={creatingExam}>Cancelar</button>
+              <button type="button" className="btn btn--primary" onClick={submitCreateExam} disabled={creatingExam}>{creatingExam ? 'Criando…' : 'Criar exame'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      
+
+      {/* Overlay não bloqueante exibido após criação do exame */}
+      {showCreationOverlay && (
+        <div className="exam-create-modal-overlay" onClick={() => setShowCreationOverlay(false)}>
+          <div className="exam-create-modal" onClick={e => e.stopPropagation()} role="dialog">
+            <div className="exam-create-modal__header">
+              <h3>Criação do exame em andamento</h3>
+            </div>
+            <div style={{ padding: 'var(--space-4)' }}>
+              <p>O exame foi criado no servidor e está sendo processado. Você pode continuar navegando — o processamento continuará em segundo plano.</p>
+              <p style={{ marginTop: 'var(--space-2)' }}><strong>Clique para continuar navegando</strong></p>
+            </div>
+            <div className="exam-create-modal__footer">
+              <button type="button" className="btn btn--ghost" onClick={() => setShowCreationOverlay(false)}>Fechar</button>
+              <button type="button" className="btn btn--primary" onClick={() => navigate('/app/exams')}>Continuar para antibiogramas</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Steps 3 e 4 */}
       {(step === 'running' || step === 'done') && patient && (
         <>
           <div className="new-exam-selected-patient">
@@ -219,7 +465,7 @@ export function NewExamPage() {
             </span>
             <div>
               <p className="list-title">{patient.name}</p>
-              <p className="muted small">Leito: {patient.bed} · {patient.age} anos</p>
+              <p className="muted small">{patient.age} anos{patient.gender ? ` • ${patient.gender}` : ''}{patient.cpf ? ` • CPF: ${patient.cpf}` : ''}</p>
             </div>
             <span className={`pill status ${riskClass(patient.risk)}`}>{patient.risk}</span>
           </div>
@@ -301,6 +547,78 @@ export function NewExamPage() {
           role="dialog" aria-modal="true" aria-label="Imagem ampliada">
           <img src={lightbox} alt="Resultado" className="lightbox-img" />
           <button type="button" className="lightbox-close" onClick={() => setLightbox(null)}>✕</button>
+        </div>
+      )}
+
+      {/* Modal — criar paciente */}
+      {showCreateModal && (
+        <div className="exam-create-modal-overlay" onClick={() => setShowCreateModal(false)}>
+          <div className="exam-create-modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="create-patient-title">
+            <div className="exam-create-modal__header">
+              <h3 id="create-patient-title">Criar novo paciente</h3>
+              <button type="button" className="exam-create-modal__close" onClick={() => setShowCreateModal(false)} aria-label="Fechar">✕</button>
+            </div>
+
+            <div className="exam-create-form">
+              <label className="form-label form-label--full">
+                Nome completo *
+                <input type="text" className={`input${fieldErrors.name ? ' input--error' : ''}`} placeholder="Ex: Pedro Lima" value={createName} onChange={e => setCreateName(e.target.value)} />
+                {fieldErrors.name && <span className="form-error">{fieldErrors.name}</span>}
+              </label>
+              <label className="form-label">
+                Data de nascimento *
+                <input type="date" className={`input${fieldErrors.birthDate ? ' input--error' : ''}`} value={createBirthDate} onChange={e => setCreateBirthDate(e.target.value)} />
+                {fieldErrors.birthDate && <span className="form-error">{fieldErrors.birthDate}</span>}
+              </label>
+              <label className="form-label">
+                Sexo
+                <select className="input" value={createGender} onChange={e => setCreateGender(e.target.value as PatientGender | '')}>
+                  <option value="">Não informado</option>
+                  <option value="Masculino">Masculino</option>
+                  <option value="Feminino">Feminino</option>
+                  <option value="Outro">Outro</option>
+                </select>
+              </label>
+              <label className="form-label">
+                CPF
+                <input type="text" className={`input${fieldErrors.cpf ? ' input--error' : ''}`} placeholder="000.000.000-00" value={createCpf} onChange={e => setCreateCpf(maskCpf(e.target.value))} />
+                {fieldErrors.cpf && <span className="form-error">{fieldErrors.cpf}</span>}
+              </label>
+              <label className="form-label">
+                RG
+                <input type="text" className={`input${fieldErrors.rg ? ' input--error' : ''}`} placeholder="00.000.000-0" value={createRg} onChange={e => setCreateRg(maskRg(e.target.value))} />
+                {fieldErrors.rg && <span className="form-error">{fieldErrors.rg}</span>}
+              </label>
+              <label className="form-label">
+                Telefone
+                <input type="text" className={`input${fieldErrors.phone ? ' input--error' : ''}`} placeholder="(11) 99999-0000" value={createPhone} onChange={e => setCreatePhone(maskPhone(e.target.value))} />
+                {fieldErrors.phone && <span className="form-error">{fieldErrors.phone}</span>}
+              </label>
+              <label className="form-label">
+                Risco *
+                <select className="input" value={createRisk} onChange={e => setCreateRisk(e.target.value as PatientRisk)}>
+                  <option value="Verde">Verde</option>
+                  <option value="Amarelo">Amarelo</option>
+                  <option value="Vermelho">Vermelho</option>
+                </select>
+              </label>
+              <label className="form-label form-label--full">
+                Observações clínicas
+                <textarea className="input" rows={3} placeholder="Alergias, histórico relevante..." value={createObs} onChange={e => setCreateObs(e.target.value)} style={{ resize: 'vertical' }} />
+              </label>
+
+              {submitError && <p className="form-error form-label--full">{submitError}</p>}
+            </div>
+
+            <div className="exam-create-modal__footer">
+              <button type="button" className="btn btn--ghost" onClick={() => setShowCreateModal(false)} disabled={creating}>
+                Cancelar
+              </button>
+              <button type="button" className="btn btn--primary" onClick={submitCreatePatient} disabled={creating}>
+                {creating ? <Spinner /> : 'Criar paciente'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

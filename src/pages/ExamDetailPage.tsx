@@ -12,6 +12,7 @@ import {
   Tooltip,
 } from 'chart.js'
 import { getExam } from '../api/exams.ts'
+import { UNBRELLA_BASE } from '../api/unbrella.ts'
 import { Spinner } from '../components/Spinner.tsx'
 import { extractErrorMessage } from '../api/client.ts'
 import { colorFromInterpretation, mapInterpretation, statusClass } from '../utils/status.ts'
@@ -124,7 +125,8 @@ export function ExamDetailPage() {
               >
                 <div className={`pipeline-thumb${isCurrent ? ' current' : ''}`}>
                   {isActive && exam.previewUrl ? (
-                    <img src={exam.previewUrl} alt={step.label} />
+                    // previewUrl vem do backend 8080; se não existir usamos a API Unbrella (5055) para imagens mockadas
+                    <img src={exam.previewUrl || `${UNBRELLA_BASE}/paciente/${encodeURIComponent(exam.patientId)}/imagem/geral`} alt={step.label} />
                   ) : (
                     <span className="muted small">Aguardando</span>
                   )}
@@ -150,8 +152,8 @@ export function ExamDetailPage() {
                 <img src={exam.previewUrl} alt={`Foto ${index + 1}`} />
               ) : (
                 <div className="gallery-slot-empty">
-                  <p className="muted small">Foto {index + 1}</p>
-                  <p className="muted small">Sem imagem</p>
+                  {/* tenta buscar imagem mockada no serviço Unbrella para este paciente */}
+                  <img src={`${UNBRELLA_BASE}/paciente/${encodeURIComponent(exam.patientId)}/imagem/grid`} alt={`Grid ${index + 1}`} />
                 </div>
               )}
             </div>

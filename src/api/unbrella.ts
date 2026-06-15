@@ -41,3 +41,37 @@ export function diskImageUrl(pacienteId: string, discoId: number, tipo: 'analise
   // `dados` retorna JSON; `analise` e `evolucao` retornam PNG
   return `${BASE}/paciente/${encodeURIComponent(pacienteId)}/disco/${discoId}/${tipo}`
 }
+
+// ── Novos endpoints /antibiograma/ ────────────────────────────────────────────
+
+export interface AntibiogramaDiscoDado {
+  disco_id: number
+  disco_preto_mm: number
+  halo_fim_mm: number
+  halo_largura_mm: number
+  angulo_graus: number
+  n_frames: number
+  url_analise: string
+}
+
+export interface AntibiogramaStatus {
+  paciente_id: string
+  nome: string
+  status: string
+  total_discos: number
+  total_frames: number
+  calibracao: string
+  discos: AntibiogramaDiscoDado[]
+}
+
+/** GET /antibiograma/{pid}/status — retorna status + dados dos 18 discos */
+export async function getAntibiogramaStatus(pacienteId: string): Promise<AntibiogramaStatus> {
+  const res = await fetch(`${BASE}/antibiograma/${encodeURIComponent(pacienteId)}/status`)
+  if (!res.ok) throw new Error(`Unbrella API error: ${res.status}`)
+  return res.json() as Promise<AntibiogramaStatus>
+}
+
+/** URL do PNG com 4 painéis de análise do disco — /antibiograma/{pid}/disco/{did}/analise */
+export function antibiogramaDiscoAnaliseUrl(pacienteId: string, discoId: number): string {
+  return `${BASE}/antibiograma/${encodeURIComponent(pacienteId)}/disco/${discoId}/analise`
+}

@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Bar } from 'react-chartjs-2'
@@ -12,7 +12,8 @@ import {
   Tooltip,
 } from 'chart.js'
 import { getExam } from '../api/exams.ts'
-import { UNBRELLA_BASE } from '../api/unbrella.ts'
+import { getPatient } from '../api/patients.ts'
+import { antibiogramaDiscoAnaliseUrl, getAntibiogramaStatus, UNBRELLA_BASE } from '../api/unbrella.ts'
 import { Spinner } from '../components/Spinner.tsx'
 import { extractErrorMessage } from '../api/client.ts'
 import { colorFromInterpretation, mapInterpretation, statusClass } from '../utils/status.ts'
@@ -21,6 +22,7 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend)
 
 export function ExamDetailPage() {
   const { id } = useParams<{ id: string }>()
+  const [lightboxImage, setLightboxImage] = useState<string | null>(null)
 
   const examQuery = useQuery({
     queryKey: ['exam', id],
@@ -29,6 +31,25 @@ export function ExamDetailPage() {
   })
 
   const exam = examQuery.data
+
+  // Buscar detalhes do paciente
+  const patientQuery = useQuery({
+    queryKey: ['patient', exam?.patientId],
+    queryFn: () => getPatient(exam!.patientId),
+    enabled: Boolean(exam?.patientId),
+  })
+
+  const patient = patientQuery.data
+
+  // Buscar status da análise na API Unbrella
+  const antibiogramaStatusQuery = useQuery({
+    queryKey: ['antibiograma-status', exam?.patientId],
+    queryFn: () => getAntibiogramaStatus(exam!.patientId),
+    enabled: Boolean(exam?.patientId),
+    staleTime: 30_000,
+  })
+
+  const antibiogramaStatus = antibiogramaStatusQuery.data
 
   const formatDateTime = (value: string) => {
     const normalized = value.includes('T') ? value : value.replace(' ', 'T')
@@ -41,6 +62,42 @@ export function ExamDetailPage() {
       hour: '2-digit',
       minute: '2-digit',
     })
+  }
+
+  const formatDate = (value: string) => {
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return value
+    return date.toLocaleDateString('pt-BR')
+  }
+
+  const calculateAge = (birthDate: string) => {
+    const today = new Date()
+    const birth = new Date(birthDate)
+    let age = today.getFullYear() - birth.getFullYear()
+    const monthDiff = today.getMonth() - birth.getMonth()
+    if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birth.getDate())) {
+      age--
+    }
+    return age
+  }
+
+  const formatGender = (gender?: string) => {
+    if (!gender) return 'Não informado'
+    const genderMap: Record<string, string> = {
+      MALE: 'Masculino',
+      FEMALE: 'Feminino',
+      OTHER: 'Outro'
+    }
+    return genderMap[gender] || gender
+  }
+
+  const formatRisk = (risk: string) => {
+    const riskMap: Record<string, string> = {
+      Verde: 'Baixo',
+      Amarelo: 'Médio',
+      Vermelho: 'Alto'
+    }
+    return riskMap[risk] || risk
   }
 
   const statusSteps = [
@@ -124,10 +181,20 @@ export function ExamDetailPage() {
                 className={`pipeline-step${!isActive ? ' inactive' : ''}`}
               >
                 <div className={`pipeline-thumb${isCurrent ? ' current' : ''}`}>
-                  {isActive && exam.previewUrl ? (
-                    // previewUrl vem do backend 8080; se não existir usamos a API Unbrella (5055) para imagens mockadas
-                    <img src={exam.previewUrl || `${UNBRELLA_BASE}/paciente/${encodeURIComponent(exam.patientId)}/imagem/geral`} alt={step.label} />
-                  ) : (
+                  {isActive ? (() => {
+                    // Step "Em análise" → usa painel 4-quadros do disco 1 da API Unbrella
+                    const imgSrc = step.label === 'Em análise'
+                      ? antibiogramaDiscoAnaliseUrl(exam.patientId, 1)
+                      : (exam.previewUrl || `${UNBRELLA_BASE}/paciente/${encodeURIComponent(exam.patientId)}/disco/1/imagem`)
+                    return (
+                      <img
+                        src={imgSrc}
+                        alt={step.label}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => setLightboxImage(imgSrc)}
+                      />
+                    )
+                  })() : (
                     <span className="muted small">Aguardando</span>
                   )}
                 </div>
@@ -139,49 +206,199 @@ export function ExamDetailPage() {
         </div>
       </section>
 
-      {/* Galeria de imagens */}
+      {/* Seção de análise completa — 18 painéis de 4 quadros da API Unbrella */}
       <section className="card">
         <div className="card-header">
-          <h3>Galeria de imagens</h3>
-          <span className="pill subtle">3 slots</span>
+          <h3>Análise por disco</h3>
+          {antibiogramaStatus ? (
+            <span className="pill subtle">{antibiogramaStatus.total_discos} discos · {antibiogramaStatus.total_frames} frames · {antibiogramaStatus.calibracao}</span>
+          ) : (
+            <span className="pill subtle">18 discos</span>
+          )}
         </div>
-        <div className="gallery-grid">
-          {[0, 1, 2].map((index) => (
-            <div key={index} className="gallery-slot">
-              {exam.previewUrl && index === 0 ? (
-                <img src={exam.previewUrl} alt={`Foto ${index + 1}`} />
-              ) : (
-                <div className="gallery-slot-empty">
-                  {/* tenta buscar imagem mockada no serviço Unbrella para este paciente */}
-                  <img src={`${UNBRELLA_BASE}/paciente/${encodeURIComponent(exam.patientId)}/imagem/grid`} alt={`Grid ${index + 1}`} />
+        {antibiogramaStatusQuery.isLoading && (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-4)' }}>
+            <Spinner />
+          </div>
+        )}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+          gap: 'var(--space-4)'
+        }}>
+          {(antibiogramaStatus?.discos ?? Array.from({ length: 18 }, (_, i) => ({ disco_id: i + 1, halo_largura_mm: null as number | null }))).map((disco) => {
+            const analiseUrl = antibiogramaDiscoAnaliseUrl(exam.patientId, disco.disco_id)
+            const halo = 'halo_largura_mm' in disco && disco.halo_largura_mm != null ? disco.halo_largura_mm as number : null
+            const resistente = halo !== null && halo < 7
+            return (
+              <div key={disco.disco_id} style={{ border: '1px solid var(--border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+                <div
+                  style={{ cursor: 'pointer', lineHeight: 0 }}
+                  onClick={() => setLightboxImage(analiseUrl)}
+                  onMouseOver={(e) => (e.currentTarget.style.opacity = '0.85')}
+                  onMouseOut={(e) => (e.currentTarget.style.opacity = '1')}
+                >
+                  <img
+                    src={analiseUrl}
+                    alt={`Análise Disco ${disco.disco_id}`}
+                    style={{ width: '100%', display: 'block' }}
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                  />
                 </div>
-              )}
-            </div>
-          ))}
+                <div style={{ padding: 'var(--space-2) var(--space-3)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="muted small"><strong>Disco {disco.disco_id}</strong></span>
+                  {halo !== null && (
+                    <span className={`pill status ${resistente ? 'error' : 'success'}`} style={{ fontSize: '11px' }}>
+                      {halo.toFixed(2)} mm {resistente ? '⚠ Resistência' : '✓ Sensível'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </section>
+
+      {/* Galeria de imagens - 18 discos individuais */}
+      <section className="card">
+        <div className="card-header">
+          <h3>Galeria de discos</h3>
+          <span className="pill subtle">18 discos</span>
+        </div>
+        <div style={{ 
+          display: 'grid', 
+          gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', 
+          gap: 'var(--space-3)' 
+        }}>
+          {Array.from({ length: 18 }, (_, i) => i + 1).map((discoId) => {
+            const imageUrl = `${UNBRELLA_BASE}/paciente/${encodeURIComponent(exam.patientId)}/disco/${discoId}/imagem`
+            return (
+              <div key={discoId} style={{ textAlign: 'center' }}>
+                <div 
+                  style={{ 
+                    aspectRatio: '1', 
+                    overflow: 'hidden', 
+                    borderRadius: 'var(--radius)', 
+                    backgroundColor: 'var(--surface-2)',
+                    border: '1px solid var(--border)',
+                    cursor: 'pointer',
+                    transition: 'transform 0.2s, box-shadow 0.2s'
+                  }}
+                  onClick={() => setLightboxImage(imageUrl)}
+                  onMouseOver={(e) => {
+                    e.currentTarget.style.transform = 'scale(1.05)'
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)'
+                  }}
+                  onMouseOut={(e) => {
+                    e.currentTarget.style.transform = 'scale(1)'
+                    e.currentTarget.style.boxShadow = 'none'
+                  }}
+                >
+                  <img 
+                    src={imageUrl}
+                    alt={`Disco ${discoId}`}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    onError={(e) => {
+                      const target = e.target as HTMLImageElement
+                      target.style.display = 'none'
+                    }}
+                  />
+                </div>
+                <span className="muted small" style={{ marginTop: 'var(--space-1)', display: 'block' }}>
+                  Disco {discoId}
+                </span>
+              </div>
+            )
+          })}
         </div>
       </section>
 
       <div className="grid">
         <section className="card">
           <div className="card-header">
-            <h3>Dados clínicos</h3>
-            <span className="pill subtle">Coletado em {formatDateTime(exam.collectedAt)}</span>
+            <h3>Dados do Paciente</h3>
+            {patient && (
+              <span className={`pill status ${patient.risk === 'Vermelho' ? 'error' : patient.risk === 'Amarelo' ? 'warning' : 'success'}`}>
+                Risco {formatRisk(patient.risk)}
+              </span>
+            )}
           </div>
-          <p className="muted">Paciente: <strong>{exam.patientName ?? 'Paciente'}</strong></p>
-          <p className="muted" style={{ marginTop: 'var(--space-2)' }}>Médico: <strong>{exam.doctorName ?? 'Equipe'}</strong></p>
-          {exam.notes && (
-            <p className="muted" style={{ marginTop: 'var(--space-2)' }}>
-              Observações: {exam.notes}
-            </p>
+          {patientQuery.isLoading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--space-4)' }}>
+              <Spinner />
+            </div>
+          ) : patient ? (
+            <>
+              <p className="muted">
+                <strong>Nome:</strong> {patient.name}
+              </p>
+              {patient.birthDate && (
+                <p className="muted" style={{ marginTop: 'var(--space-2)' }}>
+                  <strong>Idade:</strong> {calculateAge(patient.birthDate)} anos ({formatDate(patient.birthDate)})
+                </p>
+              )}
+              {patient.gender && (
+                <p className="muted" style={{ marginTop: 'var(--space-2)' }}>
+                  <strong>Sexo:</strong> {formatGender(patient.gender)}
+                </p>
+              )}
+              {patient.cpf && (
+                <p className="muted" style={{ marginTop: 'var(--space-2)' }}>
+                  <strong>CPF:</strong> {patient.cpf}
+                </p>
+              )}
+              {patient.phone && (
+                <p className="muted" style={{ marginTop: 'var(--space-2)' }}>
+                  <strong>Telefone:</strong> {patient.phone}
+                </p>
+              )}
+              {patient.observations && (
+                <p className="muted" style={{ marginTop: 'var(--space-2)' }}>
+                  <strong>Observações:</strong> {patient.observations}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="muted">Paciente: <strong>{exam.patientName ?? 'Não disponível'}</strong></p>
           )}
         </section>
 
         <section className="card">
           <div className="card-header">
-            <h3>Interpretação</h3>
-            <span className="pill subtle">MIC</span>
+            <h3>Dados do Exame</h3>
+            <span className="pill subtle">Coletado em {formatDateTime(exam.collectedAt)}</span>
           </div>
-          <table className="table">
+          <p className="muted">
+            <strong>Organismo:</strong> {exam.organism}
+          </p>
+          <p className="muted" style={{ marginTop: 'var(--space-2)' }}>
+            <strong>Amostra:</strong> {exam.specimen}
+          </p>
+          {exam.site && (
+            <p className="muted" style={{ marginTop: 'var(--space-2)' }}>
+              <strong>Local:</strong> {exam.site}
+            </p>
+          )}
+          <p className="muted" style={{ marginTop: 'var(--space-2)' }}>
+            <strong>Médico responsável:</strong> {exam.doctorName ?? 'Equipe'}
+          </p>
+          <p className="muted" style={{ marginTop: 'var(--space-2)' }}>
+            <strong>Origem:</strong> {exam.source}
+          </p>
+          {exam.notes && (
+            <p className="muted" style={{ marginTop: 'var(--space-2)' }}>
+              <strong>Observações:</strong> {exam.notes}
+            </p>
+          )}
+        </section>
+      </div>
+
+      <section className="card">
+        <div className="card-header">
+          <h3>Interpretação</h3>
+          <span className="pill subtle">MIC</span>
+        </div>
+        <table className="table">
             <thead>
               <tr>
                 <th>Antibiótico</th>
@@ -204,7 +421,6 @@ export function ExamDetailPage() {
             </tbody>
           </table>
         </section>
-      </div>
 
       {chartData && (
         <section className="card">
@@ -213,6 +429,74 @@ export function ExamDetailPage() {
           </div>
           <Bar data={chartData} options={{ plugins: { legend: { display: false } } }} />
         </section>
+      )}
+
+      {/* Modal Lightbox para expandir imagens */}
+      {lightboxImage && (
+        <div 
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.95)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+            cursor: 'pointer',
+            padding: 'var(--space-6)'
+          }}
+          onClick={() => setLightboxImage(null)}
+        >
+          <div style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <img 
+              src={lightboxImage}
+              alt="Imagem expandida"
+              style={{ 
+                width: 'auto',
+                height: 'auto',
+                maxWidth: '95vw', 
+                maxHeight: '95vh',
+                minWidth: '600px',
+                minHeight: '600px',
+                objectFit: 'contain',
+                borderRadius: 'var(--radius)',
+                boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)'
+              }}
+            />
+            <button
+              style={{
+                position: 'absolute',
+                top: '20px',
+                right: '20px',
+                background: 'rgba(255, 255, 255, 0.9)',
+                border: 'none',
+                borderRadius: '50%',
+                width: '48px',
+                height: '48px',
+                cursor: 'pointer',
+                color: '#000',
+                fontSize: '24px',
+                fontWeight: 'bold',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+                transition: 'transform 0.2s'
+              }}
+              onMouseOver={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
+              onMouseOut={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              onClick={(e) => {
+                e.stopPropagation()
+                setLightboxImage(null)
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )
